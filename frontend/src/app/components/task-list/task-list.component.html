@@ -1,0 +1,54 @@
+<div class="task-container">
+
+  <h2>Lista de Tareas</h2>
+
+<button (click)="loadTasks()">
+  Consultar tareas
+</button>
+
+<p *ngIf="backendStatus">
+  {{ backendStatus }}
+</p>
+
+  <div class="add-task">
+    <input
+      type="text"
+      [(ngModel)]="newTaskTitle"
+      placeholder="Nueva tarea"
+      (keyup.enter)="addTask()"
+    />
+
+    <button (click)="addTask()">
+      Agregar
+    </button>
+
+	<button (click)="loadTasks()">
+    Consultar tareas
+  </button>
+
+  </div>
+
+
+
+  <div *ngIf="tasks.length === 0" class="empty-message">
+    No hay tareas.
+  </div>
+
+  <ul *ngIf="tasks.length > 0">
+    <li *ngFor="let task of tasks">
+
+      <span
+        [class.completed]="task.completed"
+        (click)="toggleTask(task)"
+      >
+        {{ task.title }}
+      </span>
+
+      <button (click)="deleteTask(task.id)">
+        Eliminar
+      </button>
+
+    </li>
+  </ul>
+
+</div>

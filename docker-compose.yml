@@ -1,0 +1,49 @@
+services:
+
+  database:
+    image: mysql:8.0
+    container_name: lista-tareas-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: lista_tareas
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/init:/docker-entrypoint-initdb.d
+    networks:
+      - lista-tareas-network
+
+  backend:
+    build:
+      context: ./backend
+    container_name: lista-tareas-backend
+    restart: unless-stopped
+    depends_on:
+      - database
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://database:3306/lista_tareas
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+    ports:
+      - "8080:8080"
+    networks:
+      - lista-tareas-network
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: lista-tareas-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+    networks:
+      - lista-tareas-network
+
+volumes:
+  mysql_data:
+
+networks:
+  lista-tareas-network:
+    driver: bridge
