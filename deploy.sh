@@ -2,92 +2,72 @@
 
 set -e
 
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
 echo "=========================================="
 echo "   DESPLIEGUE LISTA DE TAREAS"
 echo "=========================================="
-echo
 
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
-echo "[1/9] Comprobando Docker..."
+echo
+echo "[1/10] Comprobando Docker..."
 
 if ! command -v docker >/dev/null 2>&1; then
-    echo "Docker no está instalado. Instalando..."
-    curl -fsSL https://get.docker.com | sh
-    systemctl enable --now docker
+    echo "Docker no está instalado."
+    exit 1
 fi
 
 echo "Docker OK"
+
 echo
+echo "[2/10] Comprobando Docker Compose..."
 
-echo "[2/9] Comprobando Docker Compose..."
-
-if docker compose version >/dev/null 2>&1; then
+if command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE="docker-compose"
+elif docker compose version >/dev/null 2>&1; then
     COMPOSE="docker compose"
-elif command -v docker-compose >/dev/null 2>&1; then
-    COMPOSE="docker-compose"
 else
-    echo "Instalando Docker Compose..."
-    apt-get update
-    apt-get install -y docker-compose
-    COMPOSE="docker-compose"
+    echo "Docker Compose no está instalado."
+    exit 1
 fi
 
 echo "Compose OK"
-echo
 
-echo "[3/9] Comprobando archivos del proyecto..."
+echo
+echo "[3/10] Comprobando archivos del proyecto..."
 
 if [ ! -f "docker-compose.yml" ]; then
-    echo "ERROR: no existe docker-compose.yml"
+    echo "No existe docker-compose.yml"
+    exit 1
+fi
+
+if [ ! -f "backend/Dockerfile" ]; then
+    echo "No existe backend/Dockerfile"
     exit 1
 fi
 
 if [ ! -f "frontend/Dockerfile" ]; then
-    echo "ERROR: no existe frontend/Dockerfile"
-    exit 1
-fi
-
-if [ ! -f "frontend/nginx.conf" ]; then
-    echo "ERROR: no existe frontend/nginx.conf"
+    echo "No existe frontend/Dockerfile"
     exit 1
 fi
 
 echo "Archivos OK"
+
 echo
+echo "[4/10] Comprobando conexión del frontend con el backend..."
 
-echo "[4/9] Comprobando conexión del frontend con el backend..."
-
-if [ -f "frontend/src/app/services/task.service.ts" ]; then
-
-    if grep -q "private apiUrl = 'http://10." \
-        frontend/src/app/services/task.service.ts 2>/dev/null; then
-
-        echo "Se encontró una IP fija en apiUrl."
-        echo "Cambiándola a /api/tasks..."
-
-        sed -i -E \
-        "s#private apiUrl = .*#private apiUrl = '/api/tasks';#" \
-        frontend/src/app/services/task.service.ts
-
-    elif grep -q "private apiUrl = '/api/tasks'" \
-        frontend/src/app/services/task.service.ts; then
-
-        echo "apiUrl ya está configurado correctamente."
-
-    else
-        echo "No se pudo comprobar automáticamente apiUrl."
-        echo "Revisa frontend/src/app/services/task.service.ts"
-    fi
+if grep -q "private apiUrl = '/api/tasks'" frontend/src/app/services/task.service.ts; then
+    echo "apiUrl ya está configurado correctamente."
+else
+    echo "Corrigiendo apiUrl del frontend..."
+    sed -i "s#private apiUrl.*#private apiUrl = '/api/tasks';#" frontend/src/app/services/task.service.ts
+    echo "apiUrl corregido."
 fi
 
 echo
+echo "[5/10] Configurando Nginx..."
 
-echo "[5/9] Configurando Nginx..."
-
-cat > frontend/nginx.conf <<'EOF'
+cat > frontend/nginx.conf <<'NGINX'
 server {
     listen 80;
     server_name _;
@@ -109,222 +89,171 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
-EOF
+NGINX
 
 echo "Nginx configurado."
-echo
-
-echo "[6/9] Comprobando Docker Compose..."
 
 echo
-echo "Contenedores actuales:"
-$COMPOSE ps || true
-echo
+echo "[6/10] Comprobando Java y Maven..."
 
-echo "[7/9] Construyendo las imágenes..."
+if ! command -v java >/dev/null 2>&1; then
+    echo "Java no está instalado."
+    echo "Instalando OpenJDK 17..."
+    apt-get update -y
+    apt-get install -y openjdk-17-jdk
+fi
+
+if ! command -v mvn >/dev/null 2>&1; then
+    echo "Maven no está instalado."
+    echo "Instalando Maven..."
+    apt-get update -y
+    apt-get install -y maven
+fi
+
+echo "Java:"
+java -version
+
+echo
+echo "Maven:"
+mvn -version
+
+echo
+echo "[7/10] Comprobando el archivo JAR del backend..."
+
+if [ -f "backend/target/backend-0.0.1.jar" ]; then
+    echo "JAR encontrado:"
+    ls -lh backend/target/backend-0.0.1.jar
+else
+    echo "JAR no encontrado."
+    echo "Compilando backend con Maven..."
+
+    cd backend
+
+    mvn clean package -DskipTests
+
+    cd "$PROJECT_DIR"
+
+    if [ ! -f "backend/target/backend-0.0.1.jar" ]; then
+        echo
+        echo "ERROR: Maven terminó pero no se encontró:"
+        echo "backend/target/backend-0.0.1.jar"
+        echo
+        echo "Archivos generados:"
+        find backend/target -maxdepth 1 -type f -ls 2>/dev/null || true
+        exit 1
+    fi
+
+    echo "JAR generado correctamente:"
+    ls -lh backend/target/backend-0.0.1.jar
+fi
+
+echo
+echo "[8/10] Configurando variables de entorno..."
+
+if [ ! -f ".env" ]; then
+
+    echo
+    echo "No existe archivo .env."
+    echo "Vamos a crear uno."
+    echo
+
+    read -p "MYSQL_ROOT_PASSWORD: " MYSQL_ROOT_PASSWORD
+
+    if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+        echo "La contraseña de MySQL no puede quedar vacía."
+        exit 1
+    fi
+
+    cat > .env <<ENV
+MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD
+SPRING_DATASOURCE_PASSWORD=$MYSQL_ROOT_PASSWORD
+ENV
+
+    echo ".env creado."
+else
+    echo ".env ya existe."
+fi
+
+echo
+echo "[9/10] Construyendo y levantando los contenedores..."
 
 $COMPOSE down --remove-orphans 2>/dev/null || true
 
 $COMPOSE build
 
-echo
-
-echo "[8/9] Levantando la aplicación..."
-
 $COMPOSE up -d
 
 echo
-echo "Esperando unos segundos..."
-sleep 10
+echo "Contenedores:"
+$COMPOSE ps
 
 echo
-
-echo "=========================================="
-echo "      ESTADO DE LOS CONTENEDORES"
-echo "=========================================="
-
-docker ps
-
-echo
-
-echo "[9/9] Probando backend..."
+echo "Esperando al backend..."
 
 BACKEND_OK=0
 
-for i in {1..20}; do
+for i in $(seq 1 30); do
 
-    if curl -sf http://127.0.0.1:8080/api/tasks >/tmp/tasks_response.txt 2>/dev/null; then
+    if curl -s http://127.0.0.1:8080/api/tasks >/dev/null 2>&1; then
         BACKEND_OK=1
         break
     fi
 
+    echo "Esperando... ($i/30)"
     sleep 2
 done
 
 if [ "$BACKEND_OK" -eq 1 ]; then
+    echo
     echo "BACKEND OK"
     echo
     echo "Respuesta:"
-    cat /tmp/tasks_response.txt
-else
-    echo "ERROR: el backend no responde."
+    curl -s http://127.0.0.1:8080/api/tasks
     echo
-    echo "Últimos logs del backend:"
-    $COMPOSE logs --tail=50 backend
+else
+    echo
+    echo "ERROR: El backend no respondió."
+    echo
+    echo "Logs del backend:"
+    $COMPOSE logs --tail=80 backend
     exit 1
 fi
 
 echo
-echo "=========================================="
-echo "       PROBANDO NGINX / FRONTEND"
-echo "=========================================="
-
-if curl -sf http://127.0.0.1/api/tasks >/tmp/proxy_response.txt 2>/dev/null; then
-
-    echo "NGINX + BACKEND OK"
-    echo
-    echo "Respuesta mediante proxy:"
-    cat /tmp/proxy_response.txt
-
-else
-
-    echo "ERROR: Nginx no puede comunicarse con el backend."
-    echo
-    echo "Configuración de Nginx:"
-    cat frontend/nginx.conf
-    echo
-    echo "Logs del frontend:"
-    $COMPOSE logs --tail=50 frontend
-    exit 1
-
-fi
+echo "[10/10] Comprobando frontend y proxy Nginx..."
 
 echo
-echo "=========================================="
-echo "       INSTALANDO / COMPROBANDO NGROK"
-echo "=========================================="
-
-if ! command -v ngrok >/dev/null 2>&1; then
-
-    echo "ngrok no está instalado."
-
-    echo "Instalando ngrok..."
-
-    curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc \
-        | tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
-
-    echo "deb https://ngrok-agent.s3.amazonaws.com buster main" \
-        | tee /etc/apt/sources.list.d/ngrok.list >/dev/null
-
-    apt-get update
-    apt-get install -y ngrok
-
-fi
+echo "Frontend:"
+curl -I http://127.0.0.1:80
 
 echo
-echo "ngrok OK"
+echo "API mediante Nginx:"
+curl -s http://127.0.0.1:80/api/tasks
+
 echo
 
 echo "=========================================="
-echo "          CONFIGURACIÓN DE NGROK"
+echo "       DESPLIEGUE COMPLETADO"
 echo "=========================================="
-echo
-
-read -s -p "Introduce tu Authtoken de ngrok: " NGROK_TOKEN
-echo
-echo
-
-if [ -z "$NGROK_TOKEN" ]; then
-    echo "No se introdujo token."
-    echo "La aplicación queda funcionando localmente."
-    echo
-    echo "Frontend: http://localhost"
-    echo "Backend:  http://localhost:8080/api/tasks"
-    exit 0
-fi
-
-ngrok config add-authtoken "$NGROK_TOKEN"
 
 echo
-echo "Iniciando ngrok..."
-echo
-
-pkill -f "ngrok http" 2>/dev/null || true
-sleep 2
-
-nohup ngrok http 80 > /tmp/ngrok.log 2>&1 &
-
-sleep 5
-
-echo
-echo "=========================================="
-echo "          RESULTADO FINAL"
-echo "=========================================="
-echo
-
 echo "Frontend:"
 echo "http://localhost"
 
 echo
-echo "Backend:"
+echo "Backend directo:"
 echo "http://localhost:8080/api/tasks"
 
 echo
-echo "Proxy Nginx:"
+echo "API mediante Nginx:"
 echo "http://localhost/api/tasks"
 
 echo
-
-PUBLIC_URL=""
-
-for i in {1..15}; do
-
-    PUBLIC_URL=$(curl -s http://127.0.0.1:4040/api/tunnels 2>/dev/null \
-        | grep -oE '"public_url":"[^"]+"' \
-        | head -n1 \
-        | cut -d'"' -f4)
-
-    if [ -n "$PUBLIC_URL" ]; then
-        break
-    fi
-
-    sleep 1
-done
-
-if [ -n "$PUBLIC_URL" ]; then
-
-    echo "=========================================="
-    echo "          URL PUBLICA NGROK"
-    echo "=========================================="
-    echo
-    echo "$PUBLIC_URL"
-    echo
-    echo "Abre esa URL en el navegador."
-    echo
-
-else
-
-    echo "No se pudo obtener automáticamente la URL."
-    echo
-    echo "Revisa:"
-    echo "cat /tmp/ngrok.log"
-    echo
-
-fi
-
-echo "=========================================="
-echo "           DESPLIEGUE TERMINADO"
-echo "=========================================="
-echo
 echo "Contenedores:"
-docker ps
+$COMPOSE ps
+
 echo
-echo "Para ver logs:"
-echo "$COMPOSE logs -f"
-echo
-echo "Para detener todo:"
-echo "$COMPOSE down"
-echo
-echo "Para detener ngrok:"
-echo "pkill -f 'ngrok http'"
-echo
+echo "=========================================="
+echo " Ahora puedes configurar ngrok sobre"
+echo " el puerto 80."
+echo "=========================================="
